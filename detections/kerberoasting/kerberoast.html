@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Kerberoasting Detection · SIEM Engineering</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg:        #080808;
+    --surface:   #0f0f0f;
+    --border:    rgba(255,255,255,0.07);
+    --border-hi: rgba(255,255,255,0.14);
+    --text:      #e8e8e8;
+    --muted:     #6e6e73;
+    --accent:    #2997ff;
+    --accent-lo: rgba(41,151,255,0.12);
+    --critical:  #ff453a;
+    --high:      #ff9f0a;
+    --medium:    #ffd60a;
+    --green:     #30d158;
+    --radius:    14px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Geist', sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* ─── GRAIN OVERLAY ─── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.4;
+  }
+
+  /* ─── AMBIENT GLOW ─── */
+  .ambient {
+    position: fixed;
+    width: 700px; height: 700px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(41,151,255,0.06) 0%, transparent 70%);
+    top: -200px; right: -200px;
+    pointer-events: none;
+    animation: drift 18s ease-in-out infinite alternate;
+  }
+  .ambient-2 {
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(255,69,58,0.04) 0%, transparent 70%);
+    top: 60%; left: -150px;
+    animation-delay: -9s;
+  }
+  @keyframes drift {
+    from { transform: translate(0, 0) scale(1); }
+    to   { transform: translate(40px, 60px) scale(1.1); }
+  }
+
+  /* ─── LAYOUT ─── */
+  .wrap { max-width: 900px; margin: 0 auto; padding: 0 28px; }
+
+  /* ─── NAV ─── */
+  nav {
+    position: sticky; top: 0; z-index: 100;
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(24px) saturate(180%);
+    background: rgba(8,8,8,0.72);
+  }
+  nav .wrap {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 52px;
+  }
+  .nav-brand {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px; font-weight: 500; color: var(--muted);
+    text-decoration: none;
+  }
+  .nav-brand .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.4; }
+  }
+  .nav-links { display: flex; gap: 24px; }
+  .nav-links a {
+    font-size: 13px; color: var(--muted); text-decoration: none;
+    transition: color 0.2s;
+  }
+  .nav-links a:hover { color: var(--text); }
+
+  /* ─── HERO ─── */
+  .hero {
+    padding: 100px 0 72px;
+    position: relative;
+  }
+  .hero-eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 11px; font-weight: 500; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent);
+    background: var(--accent-lo);
+    border: 1px solid rgba(41,151,255,0.2);
+    padding: 5px 12px; border-radius: 100px;
+    margin-bottom: 28px;
+    animation: fadeUp 0.6s ease both;
+  }
+  .hero h1 {
+    font-family: 'Instrument Serif', serif;
+    font-size: clamp(42px, 6vw, 68px);
+    font-weight: 400;
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+    margin-bottom: 20px;
+    animation: fadeUp 0.6s 0.1s ease both;
+  }
+  .hero h1 em {
+    font-style: italic;
+    color: var(--muted);
+  }
+  .hero-sub {
+    font-size: 17px; color: var(--muted); max-width: 540px;
+    line-height: 1.65;
+    animation: fadeUp 0.6s 0.2s ease both;
+  }
+  .hero-meta {
+    display: flex; gap: 24px; margin-top: 36px; flex-wrap: wrap;
+    animation: fadeUp 0.6s 0.3s ease both;
+  }
+  .meta-chip {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12px; color: var(--muted);
+  }
+  .meta-chip svg { opacity: 0.5; }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ─── DIVIDER ─── */
+  .divider {
+    height: 1px; background: var(--border);
+    margin: 0;
+  }
+
+  /* ─── STATS STRIP ─── */
+  .stats-strip {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border-bottom: 1px solid var(--border);
+    animation: fadeUp 0.6s 0.35s ease both;
+  }
+  .stat-item {
+    padding: 28px 24px;
+    border-right: 1px solid var(--border);
+    position: relative; overflow: hidden;
+    transition: background 0.3s;
+  }
+  .stat-item:last-child { border-right: none; }
+  .stat-item:hover { background: rgba(255,255,255,0.02); }
+  .stat-val {
+    font-size: 28px; font-weight: 300;
+    letter-spacing: -0.03em;
+    color: var(--text);
+    font-family: 'Instrument Serif', serif;
+  }
+  .stat-val .unit { font-size: 14px; color: var(--muted); margin-left: 2px; }
+  .stat-lbl {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--muted); margin-top: 4px;
+  }
+
+  /* ─── SECTION ─── */
+  section { padding: 72px 0; }
+  .section-label {
+    font-size: 11px; font-weight: 500; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--muted);
+    margin-bottom: 20px;
+  }
+  h2 {
+    font-family: 'Instrument Serif', serif;
+    font-size: clamp(28px, 4vw, 38px);
+    font-weight: 400; letter-spacing: -0.02em;
+    line-height: 1.2; margin-bottom: 16px;
+  }
+  .section-body {
+    font-size: 15px; color: var(--muted);
+    line-height: 1.75; max-width: 600px;
+  }
+
+  /* ─── CODE BLOCK ─── */
+  .code-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-top: 40px;
+    position: relative;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.03) inset,
+                0 32px 64px rgba(0,0,0,0.4);
+  }
+  .code-card-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(255,255,255,0.02);
+  }
+  .code-dots { display: flex; gap: 7px; }
+  .code-dots span {
+    width: 11px; height: 11px; border-radius: 50%;
+  }
+  .code-dots span:nth-child(1) { background: #ff5f56; }
+  .code-dots span:nth-child(2) { background: #ffbd2e; }
+  .code-dots span:nth-child(3) { background: #27c93f; }
+  .code-file {
+    font-family: 'DM Mono', monospace;
+    font-size: 12px; color: var(--muted);
+  }
+  .copy-btn {
+    font-family: 'Geist', sans-serif;
+    font-size: 11px; font-weight: 500;
+    color: var(--muted); background: none;
+    border: 1px solid var(--border);
+    padding: 4px 12px; border-radius: 6px;
+    cursor: pointer; transition: all 0.2s;
+    letter-spacing: 0.04em;
+  }
+  .copy-btn:hover { color: var(--text); border-color: var(--border-hi); }
+  .copy-btn.copied { color: var(--green); border-color: rgba(48,209,88,0.3); }
+
+  pre {
+    padding: 28px 24px;
+    overflow-x: auto;
+    font-family: 'DM Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.85;
+    color: #c9d1d9;
+    counter-reset: line;
+  }
+
+  .line {
+    display: block;
+    position: relative;
+    padding-left: 40px;
+    border-radius: 4px;
+    transition: background 0.15s;
+  }
+  .line:hover { background: rgba(255,255,255,0.03); }
+  .line::before {
+    counter-increment: line;
+    content: counter(line);
+    position: absolute; left: 0;
+    width: 28px; text-align: right;
+    color: #3d3d3d;
+    font-size: 11px;
+    user-select: none;
+  }
+
+  /* Token colors */
+  .k  { color: #ff7b72; }   /* keyword / pipe */
+  .f  { color: #79c0ff; }   /* function / command */
+  .s  { color: #a5d6ff; }   /* string / field */
+  .v  { color: #ffa657; }   /* value */
+  .c  { color: #8b949e; font-style: italic; } /* comment */
+  .op { color: #ff7b72; }   /* operator */
+  .n  { color: #d2a8ff; }   /* number */
+
+  /* ─── RISK CARDS ─── */
+  .risk-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 16px; margin-top: 40px;
+  }
+  .risk-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    position: relative; overflow: hidden;
+    transition: transform 0.25s, border-color 0.25s, box-shadow 0.25s;
+  }
+  .risk-card:hover {
+    transform: translateY(-4px);
+    border-color: var(--border-hi);
+    box-shadow: 0 16px 40px rgba(0,0,0,0.4);
+  }
+  .risk-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 2px;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .risk-card.critical::before { background: var(--critical); }
+  .risk-card.high::before     { background: var(--high); }
+  .risk-card.medium::before   { background: var(--medium); }
+
+  .risk-badge {
+    display: inline-block;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.12em;
+    text-transform: uppercase; padding: 3px 9px; border-radius: 4px;
+    margin-bottom: 16px;
+  }
+  .critical .risk-badge { color: var(--critical); background: rgba(255,69,58,0.1); }
+  .high     .risk-badge { color: var(--high);     background: rgba(255,159,10,0.1); }
+  .medium   .risk-badge { color: var(--medium);   background: rgba(255,214,10,0.1); }
+
+  .risk-threshold {
+    font-family: 'DM Mono', monospace;
+    font-size: 13px; color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .risk-desc {
+    font-size: 13px; color: #4a4a4f;
+    line-height: 1.6;
+  }
+
+  /* ─── MITRE CARD ─── */
+  .mitre-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+    margin-top: 40px;
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    position: relative; overflow: hidden;
+  }
+  .mitre-card::after {
+    content: 'T1558.003';
+    position: absolute; right: 32px; bottom: 32px;
+    font-family: 'DM Mono', monospace;
+    font-size: 60px; font-weight: 300;
+    color: rgba(41,151,255,0.04);
+    letter-spacing: -0.04em;
+    pointer-events: none;
+  }
+  .mitre-row { display: flex; flex-direction: column; gap: 4px; }
+  .mitre-key {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--muted);
+  }
+  .mitre-val {
+    font-family: 'DM Mono', monospace;
+    font-size: 14px; color: var(--text);
+  }
+  .mitre-val.accent { color: var(--accent); }
+  .mitre-val.critical { color: var(--critical); }
+
+  /* ─── PIPELINE SECTION ─── */
+  .pipeline {
+    display: flex; flex-direction: column; gap: 0;
+    margin-top: 40px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .pipeline-step {
+    display: flex; align-items: flex-start; gap: 20px;
+    padding: 22px 24px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.2s;
+    position: relative;
+  }
+  .pipeline-step:last-child { border-bottom: none; }
+  .pipeline-step:hover { background: rgba(255,255,255,0.02); }
+  .step-num {
+    width: 28px; height: 28px; min-width: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--border-hi);
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px; color: var(--muted);
+    margin-top: 1px;
+  }
+  .step-content h3 {
+    font-size: 14px; font-weight: 500; color: var(--text);
+    margin-bottom: 4px;
+  }
+  .step-content p {
+    font-size: 13px; color: var(--muted); line-height: 1.6;
+  }
+  .step-tag {
+    margin-left: auto; min-width: fit-content;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px; color: var(--accent);
+    background: var(--accent-lo);
+    padding: 3px 9px; border-radius: 4px;
+    align-self: flex-start;
+    margin-top: 1px;
+  }
+
+  /* ─── FOOTER ─── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 40px 0;
+  }
+  .footer-inner {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .footer-left { font-size: 13px; color: var(--muted); }
+  .footer-links { display: flex; gap: 20px; }
+  .footer-links a {
+    font-size: 13px; color: var(--muted); text-decoration: none;
+    transition: color 0.2s;
+  }
+  .footer-links a:hover { color: var(--text); }
+
+  /* ─── SCROLLBAR ─── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 3px; }
+
+  /* ─── RESPONSIVE ─── */
+  @media (max-width: 680px) {
+    .stats-strip { grid-template-columns: 1fr 1fr; }
+    .risk-grid { grid-template-columns: 1fr; }
+    .mitre-card { grid-template-columns: 1fr; }
+    .nav-links { display: none; }
+    .hero { padding: 64px 0 48px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Ambient Glows -->
+<div class="ambient"></div>
+<div class="ambient ambient-2"></div>
+
+<!-- ─── NAV ─── -->
+<nav>
+  <div class="wrap">
+    <a href="#" class="nav-brand">
+      <span class="dot"></span>
+      security-detections
+    </a>
+    <div class="nav-links">
+      <a href="#detection">Detection</a>
+      <a href="#pipeline">Pipeline</a>
+      <a href="#mitre">MITRE</a>
+      <a href="#risk">Risk Model</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ─── HERO ─── -->
+<div class="wrap">
+  <div class="hero">
+    <div class="hero-eyebrow">
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+        <circle cx="5" cy="5" r="4" stroke="currentColor" stroke-width="1.5"/>
+        <circle cx="5" cy="5" r="1.5" fill="currentColor"/>
+      </svg>
+      Active Threat Detection · Splunk SIEM
+    </div>
+    <h1>Kerberoasting<br/><em>Detection Engine</em></h1>
+    <p class="hero-sub">
+      Statistical anomaly detection for Kerberos TGS abuse targeting RC4‑encrypted
+      service accounts — mapped to MITRE ATT&CK T1558.003.
+    </p>
+    <div class="hero-meta">
+      <div class="meta-chip">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L7 13M1 7L13 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        Splunk SPL
+      </div>
+      <div class="meta-chip">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="1" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M4 7H10M4 4.5H7M4 9.5H8.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></svg>
+        WinEventLog:Security 4769
+      </div>
+      <div class="meta-chip">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5C4 1.5 1.5 4 1.5 7S4 12.5 7 12.5 12.5 10 12.5 7 10 1.5 7 1.5Z" stroke="currentColor" stroke-width="1.5"/><path d="M7 4.5V7.5L9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        24h Rolling Window
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ─── STATS STRIP ─── -->
+<div class="wrap">
+  <div class="stats-strip">
+    <div class="stat-item">
+      <div class="stat-val">4769<span class="unit">EC</span></div>
+      <div class="stat-lbl">Event Code</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-val">0x17</div>
+      <div class="stat-lbl">RC4 Encryption</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-val">1<span class="unit">hr</span></div>
+      <div class="stat-lbl">Time Bucket</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-val">3σ</div>
+      <div class="stat-lbl">Critical Deviation</div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── DETECTION QUERY ─── -->
+<div class="wrap" id="detection">
+  <section>
+    <p class="section-label">Detection Query</p>
+    <h2>The SPL</h2>
+    <p class="section-body">
+      Identifies accounts requesting an unusual volume of TGS tickets using weak RC4 encryption,
+      a hallmark of offline password cracking attempts against service principals.
+    </p>
+
+    <div class="code-card">
+      <div class="code-card-header">
+        <div class="code-dots">
+          <span></span><span></span><span></span>
+        </div>
+        <span class="code-file">kerberoasting_detection.spl</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre id="splQuery"><span class="line"><span class="f">index</span><span class="op">=</span><span class="v">windows</span> <span class="s">sourcetype</span><span class="op">=</span><span class="v">WinEventLog:Security</span> <span class="s">EventCode</span><span class="op">=</span><span class="n">4769</span></span>
+<span class="line">    <span class="s">earliest</span><span class="op">=-</span><span class="v">24h</span> <span class="s">latest</span><span class="op">=</span><span class="v">now</span></span>
+<span class="line">    <span class="s">Ticket_Encryption_Type</span><span class="op">=</span><span class="n">0x17</span></span>
+<span class="line">    <span class="s">Service_Name</span><span class="op">!=</span><span class="v">krbtgt</span></span>
+<span class="line">    <span class="s">Service_Name</span><span class="op">!=</span><span class="v">*$</span></span>
+<span class="line"><span class="k">|</span> <span class="f">bin</span> <span class="s">_time</span> <span class="s">span</span><span class="op">=</span><span class="v">1h</span></span>
+<span class="line"><span class="k">|</span> <span class="f">stats</span></span>
+<span class="line">    <span class="f">count</span> <span class="k">as</span> <span class="s">tgs_requests</span></span>
+<span class="line">    <span class="f">dc</span>(<span class="s">Service_Name</span>) <span class="k">as</span> <span class="s">unique_spns</span></span>
+<span class="line">    <span class="f">dc</span>(<span class="s">dest</span>) <span class="k">as</span> <span class="s">unique_targets</span></span>
+<span class="line">    <span class="f">values</span>(<span class="s">Service_Name</span>) <span class="k">as</span> <span class="s">targeted_spns</span></span>
+<span class="line">    <span class="k">by</span> <span class="s">user</span> <span class="s">src_ip</span> <span class="s">_time</span></span>
+<span class="line"><span class="k">|</span> <span class="f">where</span> <span class="s">tgs_requests</span> <span class="op">>=</span> <span class="n">5</span></span>
+<span class="line"><span class="k">|</span> <span class="f">eventstats</span></span>
+<span class="line">    <span class="f">avg</span>(<span class="s">tgs_requests</span>) <span class="k">as</span> <span class="s">avg_tgs</span></span>
+<span class="line">    <span class="f">stdev</span>(<span class="s">tgs_requests</span>) <span class="k">as</span> <span class="s">stdev_tgs</span></span>
+<span class="line">    <span class="k">by</span> <span class="s">user</span></span>
+<span class="line"><span class="k">|</span> <span class="f">eval</span> <span class="s">deviation_score</span> <span class="op">=</span> <span class="f">round</span>((<span class="s">tgs_requests</span> <span class="op">-</span> <span class="s">avg_tgs</span>)<span class="op">/</span><span class="s">stdev_tgs</span>, <span class="n">2</span>)</span>
+<span class="line"><span class="k">|</span> <span class="f">eval</span> <span class="s">risk_score</span> <span class="op">=</span> <span class="f">case</span>(</span>
+<span class="line">    <span class="s">tgs_requests</span> <span class="op">>=</span> <span class="n">15</span> <span class="k">OR</span> <span class="s">deviation_score</span> <span class="op">>=</span> <span class="n">3</span><span class="op">,</span> <span class="v">"CRITICAL"</span><span class="op">,</span></span>
+<span class="line">    <span class="s">tgs_requests</span> <span class="op">>=</span> <span class="n">10</span> <span class="k">OR</span> <span class="s">deviation_score</span> <span class="op">>=</span> <span class="n">2</span><span class="op">,</span> <span class="v">"HIGH"</span><span class="op">,</span></span>
+<span class="line">    <span class="s">tgs_requests</span> <span class="op">>=</span>  <span class="n">5</span><span class="op">,</span> <span class="v">"MEDIUM"</span></span>
+<span class="line">)</span>
+<span class="line"><span class="k">|</span> <span class="f">eval</span></span>
+<span class="line">    <span class="s">mitre_technique</span> <span class="op">=</span> <span class="v">"T1558.003"</span><span class="op">,</span></span>
+<span class="line">    <span class="s">attack_name</span>     <span class="op">=</span> <span class="v">"Kerberoasting"</span><span class="op">,</span></span>
+<span class="line">    <span class="s">encryption</span>      <span class="op">=</span> <span class="v">"RC4 (0x17)"</span></span>
+<span class="line"><span class="k">|</span> <span class="f">sort</span> <span class="op">-</span> <span class="s">tgs_requests</span></span></pre>
+    </div>
+  </section>
+</div>
+
+<div class="divider"></div>
+
+<!-- ─── PIPELINE ─── -->
+<div class="wrap" id="pipeline">
+  <section>
+    <p class="section-label">Query Architecture</p>
+    <h2>Detection Pipeline</h2>
+    <p class="section-body">
+      Seven composable stages from raw event ingestion to risk-ranked output,
+      each scoped to a single analytical responsibility.
+    </p>
+
+    <div class="pipeline">
+      <div class="pipeline-step">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <h3>Event Filtering</h3>
+          <p>Scope to EventCode 4769 with RC4 encryption (0x17), excluding machine accounts and the krbtgt service to reduce noise.</p>
+        </div>
+        <div class="step-tag">filter</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <h3>Time Bucketing</h3>
+          <p>Bin events into 1-hour windows using <code style="font-family:'DM Mono',monospace;font-size:12px;color:#79c0ff">bin _time span=1h</code> to enable temporal aggregation and baseline comparisons.</p>
+        </div>
+        <div class="step-tag">transform</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <h3>Aggregation</h3>
+          <p>Compute TGS request volume, distinct SPN count, unique target systems, and SPN list per user/IP/time triplet.</p>
+        </div>
+        <div class="step-tag">aggregate</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">4</div>
+        <div class="step-content">
+          <h3>Threshold Pre-filter</h3>
+          <p>Drop rows below 5 TGS requests to eliminate legitimate low-frequency access and focus on anomalous behaviour.</p>
+        </div>
+        <div class="step-tag">filter</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">5</div>
+        <div class="step-content">
+          <h3>Statistical Baseline</h3>
+          <p>Calculate per-user mean and standard deviation across the 24h window using <code style="font-family:'DM Mono',monospace;font-size:12px;color:#79c0ff">eventstats</code> without collapsing rows.</p>
+        </div>
+        <div class="step-tag">enrich</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">6</div>
+        <div class="step-content">
+          <h3>Deviation Scoring</h3>
+          <p>Compute a z-score deviation metric per event — deviations ≥ 2σ or ≥ 3σ trigger escalated risk tiers.</p>
+        </div>
+        <div class="step-tag">score</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">7</div>
+        <div class="step-content">
+          <h3>MITRE Annotation & Sort</h3>
+          <p>Enrich each result row with technique ID, attack name, and encryption label. Sort descending by request volume.</p>
+        </div>
+        <div class="step-tag">enrich</div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="divider"></div>
+
+<!-- ─── RISK MODEL ─── -->
+<div class="wrap" id="risk">
+  <section>
+    <p class="section-label">Risk Classification</p>
+    <h2>Severity Tiers</h2>
+    <p class="section-body">
+      Dual-axis classification considers both absolute request volume and statistical deviation
+      from the user's personal baseline — whichever triggers first wins.
+    </p>
+    <div class="risk-grid">
+      <div class="risk-card critical">
+        <div class="risk-badge">Critical</div>
+        <div class="risk-threshold">tgs_requests ≥ 15</div>
+        <div class="risk-threshold">deviation_score ≥ 3σ</div>
+        <div class="risk-desc">Highly automated enumeration. Immediate investigation required. Likely tool-driven.</div>
+      </div>
+      <div class="risk-card high">
+        <div class="risk-badge">High</div>
+        <div class="risk-threshold">tgs_requests ≥ 10</div>
+        <div class="risk-threshold">deviation_score ≥ 2σ</div>
+        <div class="risk-desc">Elevated activity with significant deviation. Manual validation and account review advised.</div>
+      </div>
+      <div class="risk-card medium">
+        <div class="risk-badge">Medium</div>
+        <div class="risk-threshold">tgs_requests ≥ 5</div>
+        <div class="risk-threshold">—</div>
+        <div class="risk-desc">Low-volume baseline catch. Context-dependent; may reflect legitimate service polling.</div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="divider"></div>
+
+<!-- ─── MITRE ─── -->
+<div class="wrap" id="mitre">
+  <section>
+    <p class="section-label">MITRE ATT&CK</p>
+    <h2>Technique Mapping</h2>
+    <p class="section-body">
+      Kerberoasting targets the Kerberos authentication protocol to extract service account credentials
+      for offline cracking — no elevated privileges required.
+    </p>
+    <div class="mitre-card">
+      <div class="mitre-row">
+        <span class="mitre-key">Technique ID</span>
+        <span class="mitre-val accent">T1558.003</span>
+      </div>
+      <div class="mitre-row">
+        <span class="mitre-key">Tactic</span>
+        <span class="mitre-val">Credential Access</span>
+      </div>
+      <div class="mitre-row">
+        <span class="mitre-key">Technique Name</span>
+        <span class="mitre-val">Steal or Forge Kerberos Tickets — Kerberoasting</span>
+      </div>
+      <div class="mitre-row">
+        <span class="mitre-key">Encryption Target</span>
+        <span class="mitre-val critical">RC4-HMAC (0x17)</span>
+      </div>
+      <div class="mitre-row">
+        <span class="mitre-key">Data Source</span>
+        <span class="mitre-val">Windows Security Event Log · EventCode 4769</span>
+      </div>
+      <div class="mitre-row">
+        <span class="mitre-key">Detection Coverage</span>
+        <span class="mitre-val">Volume anomaly + statistical deviation baseline</span>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ─── FOOTER ─── -->
+<div class="wrap">
+  <footer>
+    <div class="footer-inner">
+      <div class="footer-left">
+        Built with Splunk SPL · MITRE ATT&CK T1558.003
+      </div>
+      <div class="footer-links">
+        <a href="https://attack.mitre.org/techniques/T1558/003/" target="_blank">MITRE ATT&CK ↗</a>
+        <a href="https://docs.splunk.com/Documentation/Splunk/latest/SearchReference" target="_blank">SPL Reference ↗</a>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<script>
+  // Copy button
+  function copyCode(btn) {
+    const raw = `index=windows sourcetype=WinEventLog:Security EventCode=4769 earliest=-24h latest=now Ticket_Encryption_Type=0x17 Service_Name!=krbtgt Service_Name!=*$\n| bin _time span=1h\n| stats count as tgs_requests dc(Service_Name) as unique_spns dc(dest) as unique_targets values(Service_Name) as targeted_spns by user src_ip _time\n| where tgs_requests >= 5\n| eventstats avg(tgs_requests) as avg_tgs stdev(tgs_requests) as stdev_tgs by user\n| eval deviation_score = round((tgs_requests - avg_tgs)/stdev_tgs,2)\n| eval risk_score = case(tgs_requests >= 15 OR deviation_score >= 3, "CRITICAL", tgs_requests >= 10 OR deviation_score >= 2, "HIGH", tgs_requests >= 5, "MEDIUM")\n| eval mitre_technique="T1558.003", attack_name="Kerberoasting", encryption="RC4 (0x17)"\n| sort - tgs_requests`;
+    navigator.clipboard.writeText(raw).then(() => {
+      btn.textContent = 'Copied ✓';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+    });
+  }
+
+  // Scroll-triggered fade-in
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.style.opacity = '1';
+        e.target.style.transform = 'translateY(0)';
+      }
+    });
+  }, { threshold: 0.08 });
+
+  document.querySelectorAll('section, .stats-strip').forEach(el => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(20px)';
+    el.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+    observer.observe(el);
+  });
+</script>
+</body>
+</html>
