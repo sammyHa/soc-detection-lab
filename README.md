@@ -4,7 +4,7 @@
 This lab simulates an enterprise Active Directory environment to develop and test security detections using Splunk.
 
 ## Lab Architecture
-(assets/network-diagram.png)
+![network-diagram](assets/network-diagram.png)
 
 ## Attack Simulations
 Kerberoasting
